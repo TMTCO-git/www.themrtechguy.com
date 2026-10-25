@@ -1,14 +1,27 @@
 {
-  "name": "tmtco-main-site",
-  "main": "src/index.js",
+  "name": "tmtcosite",
+  "main": "index.js",
   "compatibility_date": "2024-11-01",
   "compatibility_flags": ["nodejs_compat"],
+
+  // Keep variables set in the dashboard (e.g. VC_ISSUER) when deploying.
+  "keep_vars": true,
 
   "kv_namespaces": [
     {
       "binding": "SESSIONS",
       "id": "252a6494ae754649a12ba38d642cec25"
     }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "NATIVE_VC_TXNS", "class_name": "NativeVerifiedIDTransaction" }
+    ]
+  },
+
+  "migrations": [
+    { "tag": "native-vc-v1", "new_sqlite_classes": ["NativeVerifiedIDTransaction"] }
   ],
 
   "vars": {
