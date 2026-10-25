@@ -5282,13 +5282,22 @@ app.post('/auth/native/verifiedid/issue/start', async (c) => {
   // The app's Graph token identifies the caller. Only a signed-in TMTCo member may get an offer.
   const accessToken = bearerOf(c);
   if (!accessToken || accessToken.length > 4096) {
-    return c.json({ error: 'unauthorized' }, 401);
+    console.error('Native issue/start: no usable bearer token (length', accessToken.length, ')');
+    return c.json({ error: 'unauthorized', reason: 'missing_or_oversized_token' }, 401);
   }
   const meRes = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,userType', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  if (meRes.status === 401) return c.json({ error: 'session_expired' }, 401);
-  if (!meRes.ok) return c.json({ error: 'verified_id_unavailable' }, 502);
+  if (meRes.status === 401) {
+    const graphBody = await meRes.text().catch(() => '');
+    console.error('Native issue/start: Graph rejected the token (401):', graphBody.slice(0, 300));
+    return c.json({ error: 'session_expired', reason: 'graph_rejected_token', graphStatus: 401 }, 401);
+  }
+  if (!meRes.ok) {
+    const graphBody = await meRes.text().catch(() => '');
+    console.error('Native issue/start: Graph /me failed:', meRes.status, graphBody.slice(0, 300));
+    return c.json({ error: 'verified_id_unavailable', reason: 'graph_me_failed', graphStatus: meRes.status }, 502);
+  }
   const me = await meRes.json().catch(() => null);
   if (!me || !(me.mail || me.userPrincipalName) || me.userType !== 'Member') {
     return c.json({ error: 'not_eligible' }, 403);
