@@ -5281,9 +5281,15 @@ app.post('/auth/native/verifiedid/issue/start', async (c) => {
 
   // The app's Graph token identifies the caller. Only a signed-in TMTCo member may get an offer.
   const accessToken = bearerOf(c);
-  if (!accessToken || accessToken.length > 4096) {
-    console.error('Native issue/start: no usable bearer token (length', accessToken.length, ')');
-    return c.json({ error: 'unauthorized', reason: 'missing_or_oversized_token' }, 401);
+  if (!accessToken) {
+    console.error('Native issue/start: no bearer token was sent');
+    return c.json({ error: 'unauthorized', reason: 'missing_token', tokenLength: 0 }, 401);
+  }
+  // Graph validates the token itself below, so this is only a sanity cap.
+  // Admin tokens with many directory roles can be well over 4 KB.
+  if (accessToken.length > 16384) {
+    console.error('Native issue/start: bearer token too large (length', accessToken.length, ')');
+    return c.json({ error: 'unauthorized', reason: 'token_too_large', tokenLength: accessToken.length }, 401);
   }
   const meRes = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,userType', {
     headers: { Authorization: `Bearer ${accessToken}` },
