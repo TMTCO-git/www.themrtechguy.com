@@ -3437,6 +3437,25 @@ app.post('/auth/verifiedid/callback', async (c) => {
   const payload = await c.req.json().catch(() => null);
   if (!payload || !payload.state) return c.json({ error: 'invalid_payload' }, 400);
 
+  // Native iOS sign-in: forward "nvc_" callbacks to the Durable Object transaction.
+  if (String(payload.state).startsWith('nvc_') && c.env.NATIVE_VC_TXNS) {
+    const nativeTransaction = c.env.NATIVE_VC_TXNS.get(c.env.NATIVE_VC_TXNS.idFromName(payload.state));
+    const callbackStatus = payload.requestStatus;
+    const identity = callbackStatus === 'presentation_verified'
+      ? getVerifiedIdIdentity(c, payload.verifiedCredentialsData)
+      : null;
+    const nativeResult = await nativeTransaction.fetch('https://native-vc/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        status: ['request_retrieved', 'presentation_verified'].includes(callbackStatus) ? callbackStatus : 'presentation_error',
+        identity: identity ? { email: identity.email, name: identity.name } : null,
+      }),
+    });
+    const nativeResultBody = await nativeResult.json().catch(() => null);
+    if (nativeResultBody && nativeResultBody.handled) return c.json({ ok: true });
+  }
+
   const key = `vclogin:${payload.state}`;
   const existingRaw = await c.env.SESSIONS.get(key);
   if (!existingRaw) return c.json({ ok: true });
@@ -4932,6 +4951,471 @@ ${renderCommandGroups(COMMAND_GROUPS)}
 <div class="back-row"><a href="/" class="btn btn-ghost">&larr; Back to Home</a></div>
 </div>`;
   return shell('Command Reference', body, 'commands');
+});
+
+
+// ============================================================
+// NATIVE (iOS app) VERIFIED ID
+// Durable Object-backed transactions. Binding: NATIVE_VC_TXNS
+// (wrangler.jsonc durable_objects + migrations "native-vc-v1").
+// ============================================================
+const NATIVE_VC_TTL_MS = 10 * 60 * 1000;
+const NATIVE_VI_STATE = /^nvi_[0-9a-f-]{36}$/i;
+const NATIVE_VI_TTL_SECONDS = 600;
+const NATIVE_VC_STATE = /^nvc_[0-9a-f-]{36}$/i;
+const POLL_VERIFIER = /^[A-Za-z0-9_-]{43,128}$/;
+
+function constantTimeStringEqual(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string' || left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+// Per-IP limit: 8 transaction starts per minute (KV counter).
+async function nativeVerifiedIdRateLimited(c) {
+  const address = c.req.header('CF-Connecting-IP');
+  if (!address || !c.env.SESSIONS) return false;
+  const key = `native-vc-rate:${await sha256Hex(address)}`;
+  const count = Number(await c.env.SESSIONS.get(key) || 0);
+  if (count >= 8) return true;
+  await c.env.SESSIONS.put(key, String(count + 1), { expirationTtl: 60 });
+  return false;
+}
+
+function bearerOf(c) {
+  const authorization = c.req.header('Authorization') || '';
+  return authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+}
+
+export class NativeVerifiedIDTransaction {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    const action = new URL(request.url).pathname;
+
+    if (action === '/initialize' && request.method === 'POST') {
+      const record = await request.json().catch(() => null);
+      if (!record || !record.pollVerifierHash || !record.expiresAt) {
+        return Response.json({ error: 'invalid_request' }, { status: 400 });
+      }
+      await this.state.storage.put('record', record);
+      await this.state.storage.setAlarm(record.expiresAt);
+      return Response.json({ ok: true });
+    }
+
+    if (action === '/request' && request.method === 'POST') {
+      const update = await request.json().catch(() => null);
+      await this.state.storage.transaction(async (txn) => {
+        const record = await txn.get('record');
+        if (!record || Date.now() >= record.expiresAt || record.status !== 'pending') return;
+        record.requestUrl = update?.url || null;
+        record.qrCode = update?.qrCode || null;
+        await txn.put('record', record);
+      });
+      return Response.json({ ok: true });
+    }
+
+    if (action === '/callback' && request.method === 'POST') {
+      const update = await request.json().catch(() => null);
+      const known = ['request_retrieved', 'presentation_verified', 'presentation_error', 'issuance_successful', 'issuance_error'];
+      if (!update || !known.includes(update.status)) {
+        return Response.json({ handled: false });
+      }
+      let handled = false;
+      await this.state.storage.transaction(async (txn) => {
+        const record = await txn.get('record');
+        if (!record || Date.now() >= record.expiresAt || record.consumed || record.cancelled) return;
+        handled = true;
+
+        if (record.kind === 'issue') {
+          if (record.status === 'issued' || record.status === 'error') return;
+          if (update.status === 'request_retrieved' && record.status === 'pending') {
+            record.status = 'request_retrieved';
+          } else if (update.status === 'issuance_successful') {
+            record.status = 'issued';
+          } else if (update.status === 'issuance_error') {
+            record.status = 'error';
+          } else {
+            return;
+          }
+          await txn.put('record', record);
+          return;
+        }
+
+        if (record.status === 'presentation_verified' || record.status === 'presentation_error') return;
+        if (update.status === 'request_retrieved' && record.status === 'pending') {
+          record.status = 'request_retrieved';
+        } else if (update.status === 'presentation_verified') {
+          record.status = update.identity ? 'presentation_verified' : 'presentation_error';
+          record.identity = update.identity || null;
+        } else if (update.status === 'presentation_error') {
+          record.status = 'presentation_error';
+        }
+        await txn.put('record', record);
+      });
+      return Response.json({ handled });
+    }
+
+    if (action === '/status' && request.method === 'POST') {
+      const pollVerifierHash = request.headers.get('x-poll-verifier-hash') || '';
+      let result = { status: 'expired' };
+      await this.state.storage.transaction(async (txn) => {
+        const record = await txn.get('record');
+        if (!record || Date.now() >= record.expiresAt) return;
+        if (!constantTimeStringEqual(record.pollVerifierHash, pollVerifierHash)) {
+          result = { status: 'unauthorized' };
+          return;
+        }
+        if (record.cancelled) {
+          result = { status: 'cancelled' };
+        } else if (record.consumed) {
+          result = { status: 'consumed' };
+        } else if (record.kind !== 'issue' && record.status === 'presentation_verified' && record.identity) {
+          record.consumed = true;
+          result = { status: 'presentation_verified', identity: record.identity };
+          record.identity = null;
+          await txn.put('record', record);
+        } else if (record.kind !== 'issue' && record.status === 'presentation_error') {
+          record.consumed = true;
+          result = { status: 'presentation_error' };
+          await txn.put('record', record);
+        } else {
+          result = { status: record.status || 'pending' };
+        }
+      });
+      return Response.json(result, { status: result.status === 'unauthorized' ? 403 : 200 });
+    }
+
+    if (action === '/cancel' && request.method === 'POST') {
+      const pollVerifierHash = request.headers.get('x-poll-verifier-hash') || '';
+      let status = 204;
+      await this.state.storage.transaction(async (txn) => {
+        const record = await txn.get('record');
+        if (!record) return;
+        if (!constantTimeStringEqual(record.pollVerifierHash, pollVerifierHash)) {
+          status = 403;
+          return;
+        }
+        record.cancelled = true;
+        record.identity = null;
+        await txn.put('record', record);
+      });
+      return new Response(null, { status });
+    }
+
+    return new Response(null, { status: 404 });
+  }
+
+  async alarm() {
+    await this.state.storage.deleteAll();
+  }
+}
+
+// ---- Sign-in (presentation) ----
+
+app.post('/auth/native/verifiedid/start', async (c) => {
+  const transactions = c.env.NATIVE_VC_TXNS;
+  if (!transactions || !c.env.VC_CALLBACK_KEY) {
+    return c.json({ error: 'verified_id_not_configured' }, 503);
+  }
+  if (await nativeVerifiedIdRateLimited(c)) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const pollVerifier = body?.pollVerifier;
+  if (typeof pollVerifier !== 'string' || !POLL_VERIFIER.test(pollVerifier)) {
+    return c.json({ error: 'invalid_request' }, 400);
+  }
+
+  const state = `nvc_${crypto.randomUUID()}`;
+  const transaction = transactions.get(transactions.idFromName(state));
+  const createdAt = Date.now();
+  const initialized = await transaction.fetch('https://native-vc/initialize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      pollVerifierHash: await sha256Hex(pollVerifier),
+      createdAt,
+      expiresAt: createdAt + NATIVE_VC_TTL_MS,
+      status: 'pending',
+    }),
+  });
+  if (!initialized.ok) return c.json({ error: 'transaction_unavailable' }, 503);
+
+  const failTransaction = async () => {
+    await transaction.fetch('https://native-vc/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'presentation_error' }),
+    });
+  };
+
+  const token = await getVerifiedIdAppToken(c);
+  if (!token) {
+    await failTransaction();
+    return c.json({ error: 'verified_id_unavailable' }, 502);
+  }
+
+  const verifierAuthority = c.env.VC_VERIFIER_AUTHORITY || c.env.VC_AUTHORITY || VC_AUTHORITY_DEFAULT;
+  const acceptedIssuer = c.env.VC_ISSUER || c.env.VC_AUTHORITY || VC_AUTHORITY_DEFAULT;
+  const credentialType = c.env.VC_TYPE || VC_TYPE_DEFAULT;
+  const requestBody = {
+    authority: verifierAuthority,
+    includeQRCode: true,
+    includeReceipt: false,
+    registration: {
+      clientName: c.env.VC_VERIFIER_CLIENT_NAME || 'TMTCo App',
+      purpose: 'Sign in to TMTCo using your verified employee credential',
+    },
+    callback: {
+      url: `${getBaseUrl(c)}/auth/verifiedid/callback`,
+      state,
+      headers: { 'api-key': c.env.VC_CALLBACK_KEY },
+    },
+    requestedCredentials: [{
+      type: credentialType,
+      purpose: 'Prove that you are a verified TMTCo employee',
+      acceptedIssuers: [acceptedIssuer],
+      configuration: { validation: { allowRevoked: false, validateLinkedDomain: true } },
+    }],
+  };
+
+  let offerURL = '';
+  try {
+    const response = await fetch('https://verifiedid.did.msidentity.com/v1.0/verifiableCredentials/createPresentationRequest', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    const responseBody = await response.json().catch(() => null);
+    const url = typeof responseBody?.url === 'string' && responseBody.url.length <= 8192 ? responseBody.url : '';
+    let scheme = '';
+    try { scheme = url ? new URL(url).protocol : ''; } catch { scheme = ''; }
+    if (!response.ok || !['https:', 'openid-vc:', 'openid-credential-offer:'].includes(scheme)) {
+      console.error('Native createPresentationRequest failed:', response.status, JSON.stringify(responseBody));
+      await failTransaction();
+      return c.json({ error: 'verified_id_request_failed' }, 502);
+    }
+    offerURL = url;
+  } catch {
+    await failTransaction();
+    return c.json({ error: 'verified_id_request_failed' }, 502);
+  }
+
+  await transaction.fetch('https://native-vc/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: offerURL }),
+  });
+
+  return c.json({
+    state,
+    url: offerURL,
+    expiresIn: Math.floor(NATIVE_VC_TTL_MS / 1000),
+  }, 201);
+});
+
+app.get('/auth/native/verifiedid/status', async (c) => {
+  const transactions = c.env.NATIVE_VC_TXNS;
+  const state = c.req.query('state') || '';
+  const pollVerifier = bearerOf(c);
+  if (!transactions || !NATIVE_VC_STATE.test(state) || !POLL_VERIFIER.test(pollVerifier)) {
+    return c.json({ error: 'invalid_transaction' }, 403);
+  }
+
+  const transaction = transactions.get(transactions.idFromName(state));
+  const response = await transaction.fetch('https://native-vc/status', {
+    method: 'POST',
+    headers: { 'x-poll-verifier-hash': await sha256Hex(pollVerifier) },
+  });
+  if (response.status === 403) return c.json({ error: 'invalid_transaction' }, 403);
+
+  const result = await response.json().catch(() => ({ status: 'expired' }));
+  if (result.status === 'presentation_error') {
+    return c.json({ status: 'presentation_error', errorMessage: 'Verified ID could not verify this presentation.' });
+  }
+  if (result.status === 'presentation_verified') {
+    return c.json({ status: result.status, identity: result.identity });
+  }
+  return c.json({ status: result.status || 'pending' });
+});
+
+app.post('/auth/native/verifiedid/cancel', async (c) => {
+  const transactions = c.env.NATIVE_VC_TXNS;
+  const body = await c.req.json().catch(() => null);
+  const state = body?.state;
+  const pollVerifier = bearerOf(c);
+  if (!transactions || typeof state !== 'string' || !NATIVE_VC_STATE.test(state) || !POLL_VERIFIER.test(pollVerifier)) {
+    return c.json({ error: 'invalid_transaction' }, 403);
+  }
+
+  const transaction = transactions.get(transactions.idFromName(state));
+  const response = await transaction.fetch('https://native-vc/cancel', {
+    method: 'POST',
+    headers: { 'x-poll-verifier-hash': await sha256Hex(pollVerifier) },
+  });
+  return response.status === 403 ? c.json({ error: 'invalid_transaction' }, 403) : c.body(null, 204);
+});
+
+// ---- Issuance (Dashboard "Get my Verified ID" card in the iOS app) ----
+
+app.post('/auth/native/verifiedid/issue/start', async (c) => {
+  const transactions = c.env.NATIVE_VC_TXNS;
+  if (!transactions || !c.env.VC_CALLBACK_KEY) {
+    return c.json({ error: 'verified_id_not_configured' }, 503);
+  }
+  if (await nativeVerifiedIdRateLimited(c)) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+
+  // The app's Graph token identifies the caller. Only a signed-in TMTCo member may get an offer.
+  const accessToken = bearerOf(c);
+  if (!accessToken || accessToken.length > 4096) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  const meRes = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,userType', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (meRes.status === 401) return c.json({ error: 'session_expired' }, 401);
+  if (!meRes.ok) return c.json({ error: 'verified_id_unavailable' }, 502);
+  const me = await meRes.json().catch(() => null);
+  if (!me || !(me.mail || me.userPrincipalName) || me.userType !== 'Member') {
+    return c.json({ error: 'not_eligible' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const pollVerifier = body?.pollVerifier;
+  if (typeof pollVerifier !== 'string' || !POLL_VERIFIER.test(pollVerifier)) {
+    return c.json({ error: 'invalid_request' }, 400);
+  }
+
+  const token = await getVerifiedIdAppToken(c);
+  if (!token) return c.json({ error: 'verified_id_unavailable' }, 502);
+
+  const state = `nvi_${crypto.randomUUID()}`;
+  const transaction = transactions.get(transactions.idFromName(state));
+  const createdAt = Date.now();
+  const initialized = await transaction.fetch('https://native-vc/initialize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kind: 'issue',
+      pollVerifierHash: await sha256Hex(pollVerifier),
+      createdAt,
+      expiresAt: createdAt + NATIVE_VI_TTL_SECONDS * 1000,
+      status: 'pending',
+    }),
+  });
+  if (!initialized.ok) return c.json({ error: 'transaction_unavailable' }, 503);
+
+  let offerURL = '';
+  try {
+    const res = await fetch('https://verifiedid.did.msidentity.com/v1.0/verifiableCredentials/createIssuanceRequest', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        includeQRCode: true,
+        callback: {
+          url: `${getBaseUrl(c)}/auth/native/verifiedid/issue/callback`,
+          state,
+          headers: { 'api-key': c.env.VC_CALLBACK_KEY },
+        },
+        authority: c.env.VC_AUTHORITY || VC_AUTHORITY_DEFAULT,
+        registration: { clientName: 'TMTCo App' },
+        type: c.env.VC_TYPE || VC_TYPE_DEFAULT,
+        manifest: c.env.VC_MANIFEST || VC_MANIFEST_DEFAULT,
+      }),
+    });
+    const resBody = await res.json().catch(() => null);
+    offerURL = typeof resBody?.url === 'string' && resBody.url.length <= 8192 ? resBody.url : '';
+    if (!res.ok || !offerURL) {
+      console.error('Native createIssuanceRequest failed:', res.status, JSON.stringify(resBody));
+      throw new Error(`status ${res.status}`);
+    }
+  } catch {
+    await transaction.fetch('https://native-vc/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'issuance_error' }),
+    });
+    return c.json({ error: 'verified_id_request_failed' }, 502);
+  }
+
+  await transaction.fetch('https://native-vc/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: offerURL }),
+  });
+  return c.json({ state, url: offerURL, expiresIn: NATIVE_VI_TTL_SECONDS }, 201);
+});
+
+app.get('/auth/native/verifiedid/issue/status', async (c) => {
+  const transactions = c.env.NATIVE_VC_TXNS;
+  const state = c.req.query('state') || '';
+  const pollVerifier = bearerOf(c);
+  if (!transactions || !NATIVE_VI_STATE.test(state) || !POLL_VERIFIER.test(pollVerifier)) {
+    return c.json({ error: 'invalid_transaction' }, 403);
+  }
+
+  const transaction = transactions.get(transactions.idFromName(state));
+  const response = await transaction.fetch('https://native-vc/status', {
+    method: 'POST',
+    headers: { 'x-poll-verifier-hash': await sha256Hex(pollVerifier) },
+  });
+  if (response.status === 403) return c.json({ error: 'invalid_transaction' }, 403);
+  const result = await response.json().catch(() => ({ status: 'expired' }));
+  return c.json({ status: result.status || 'pending' });
+});
+
+app.post('/auth/native/verifiedid/issue/cancel', async (c) => {
+  const transactions = c.env.NATIVE_VC_TXNS;
+  const body = await c.req.json().catch(() => null);
+  const state = body?.state;
+  const pollVerifier = bearerOf(c);
+  if (!transactions || typeof state !== 'string' || !NATIVE_VI_STATE.test(state) || !POLL_VERIFIER.test(pollVerifier)) {
+    return c.json({ error: 'invalid_transaction' }, 403);
+  }
+
+  const transaction = transactions.get(transactions.idFromName(state));
+  const response = await transaction.fetch('https://native-vc/cancel', {
+    method: 'POST',
+    headers: { 'x-poll-verifier-hash': await sha256Hex(pollVerifier) },
+  });
+  return response.status === 403 ? c.json({ error: 'invalid_transaction' }, 403) : c.body(null, 204);
+});
+
+// Microsoft calls this with the api-key header. Only the state is trusted to route the update.
+app.post('/auth/native/verifiedid/issue/callback', async (c) => {
+  const apiKey = c.req.header('api-key');
+  if (!apiKey || apiKey !== c.env.VC_CALLBACK_KEY || !c.env.NATIVE_VC_TXNS) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  const payload = await c.req.json().catch(() => null);
+  if (!payload || typeof payload.state !== 'string' || !NATIVE_VI_STATE.test(payload.state)) {
+    return c.json({ error: 'invalid_payload' }, 400);
+  }
+
+  const allowed = ['request_retrieved', 'issuance_successful', 'issuance_error'];
+  if (allowed.includes(payload.requestStatus)) {
+    const transaction = c.env.NATIVE_VC_TXNS.get(c.env.NATIVE_VC_TXNS.idFromName(payload.state));
+    await transaction.fetch('https://native-vc/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: payload.requestStatus }),
+    });
+  }
+  return c.json({ ok: true });
 });
 
 export default app;
