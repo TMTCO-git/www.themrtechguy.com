@@ -1064,7 +1064,7 @@ app.get('/.wellknown/discord', (c) => {
 
 app.get('/.wellknown', (c) => {
   const body = `
-    <div class="page-secton top>
+    <div class="page-section top">
     <div class="section-header">
     <div class="section-footer">
     </div>
@@ -1073,7 +1073,11 @@ app.get('/.wellknown', (c) => {
   </div>
     <div class="back-row"><a href="/" class="btn btn-ghost">&larr; Back to Home</a></div>
   </div>`;
-      return shell ('Wellknown', body, 'wellknown');
+  return shell('Wellknown', body, 'wellknown');
+});
+
+// ============================================================
+// ROUTES - TECH THINGS
       
 
 
