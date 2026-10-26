@@ -1062,7 +1062,19 @@ app.get('/.wellknown/discord', (c) => {
     return shell ('Wellknown', body, 'wellknown');
 });
 
-
+app.get('/.wellknown', (c) => {
+  const body = `
+    <div class="page-secton top>
+    <div class="section-header">
+    <div class="section-footer">
+    </div>
+    <h2>Huh, You shouldn't belong here... </h2>
+    <h3> Please return to home and try another page </h3>
+  </div>
+    <div class="back-row"><a href="/" class="btn btn-ghost">&larr; Back to Home</a></div>
+  </div>`;
+      return shell ('Wellknown', body, 'wellknown');
+      
 
 
 // ============================================================
