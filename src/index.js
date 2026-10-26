@@ -495,6 +495,7 @@ ${body}
 <hr class="divider">
 <footer>
 <p>&copy; 2026 TMTCo &mdash; All rights reserved.</p>
+<p>ABN: 37 546 247 840 </p>
 <div class="footer-links">
 <a href="/tos">Terms of Service</a>
 <a href="/contact">Contact</a>
@@ -596,6 +597,8 @@ async function destroySession(c) {
 const ALLOWED_HOSTS = [
   'www.tmtcoau.com',
   'tmtcoau.com',
+  'tmtco.com.au',
+  'www.tmtco.com.au',
 ];
 
 function getBaseUrl(c) {
@@ -988,7 +991,7 @@ app.get('/', (c) => {
 <h1>TMTCo<br><span>Empowering I.T.</span></h1>
 <p>Your go-to hub for IT services, tech resources, and all things technology &mdash; backed by TMTCo.</p>
 <div class="hero-ctas">
-<a href="/tech" class="btn btn-primary">Explore Services</a>
+<a href="/services" class="btn btn-primary">Explore Services</a>
 <a href="/contact" class="btn btn-ghost">Get in Touch</a>
 </div>
 </div>
@@ -1034,10 +1037,10 @@ app.get('/', (c) => {
 <div>
 <strong>Logan Yeomans &mdash; Resume</strong>
 <!-- Update date when you upload a new resume -->
-<p>PDF download &middot; Last updated 2025</p>
+<p>PDF download &middot; Last updated 26/10/26</p>
 </div>
 <!-- Update resume URL if it changes -->
-<a class="btn btn-primary" href="https://git.github.themrtechguy.com/TMTCo-Main-Site-assets/Logan%20Yeomans%20Resume.pdff" target="_blank">&#x2B07; Download PDF</a>
+<a class="btn btn-primary" href="https://cp-int.tmtcoau.com/pdf-docs/Logan.Yeomans%20Resume-26.10.26.pdf" target="_blank">&#x2B07; Download PDF</a>
 </div>
 </div>
 <div class="about-placeholder">&#x1F468;&#x200D;&#x1F4BB;</div>
