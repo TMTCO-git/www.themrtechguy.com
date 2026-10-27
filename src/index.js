@@ -389,6 +389,11 @@ border-radius:var(--radius);padding:3rem 2rem;text-align:center;max-width:560px;
 .placeholder-box h3{font-family:var(--heading);font-size:1.2rem;font-weight:700;color:#fff;margin-bottom:.5rem}
 .placeholder-box p{color:var(--muted);font-size:.9rem}
 
+/* DASHBOARD SUB-MENU */
+.sub-nav{display:flex;gap:.5rem;flex-wrap:wrap;margin:0 0 2.5rem}
+.sub-nav-link{padding:.5rem 1rem;border-radius:100px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:.88rem;font-weight:500;transition:all var(--transition)}
+.sub-nav-link:hover,.sub-nav-link.active{border-color:rgba(59,130,246,.4);color:#fff;background:var(--surface2)}
+
 /* DIVIDER & FOOTER */
 .divider{max-width:1100px;margin:0 auto;border:none;border-top:1px solid var(--border)}
 footer{max-width:1100px;margin:0 auto;padding:2rem 2rem 3rem;display:flex;
@@ -451,9 +456,7 @@ ${navItem('/tos', 'Terms of Service', 'tos')}
 ${navItem('/contact', 'Contact', 'contact')}
 ${navItem('/privacy', 'Privacy', 'privacy')}
 ${navItem('/services', 'Services', 'services')}
-${navItem('/it-tools', 'IT Tools', 'tools')}
-${navItem('/gen-tools', 'General Tools', 'general')}
-${navItem('/commands', 'Command Reference', 'commands')}
+${navItem('/other', 'Other', 'other')}
 ${navItem('/.wellknown', 'Wellknown', 'wellknown')}
 </ul>
 </aside>
@@ -1003,23 +1006,23 @@ app.get('/', (c) => {
 <p class="section-sub">A collection of tools, resources, and services available through www.tmtcoau.com.</p>
 </div>
 <div class="cards">
-<a href="/it-tools" class="card">
-<div class="card-icon">&#x1F6E0;&#xFE0F;</div>
-<h3>IT Tools</h3>
-<p>Browser-based tools for everyday IT work: encoding, hashing, JWT and DNS lookups, subnet calculations, password generation and more.</p>
-<span class="card-link">Explore tools &rarr;</span>
+<a href="/services" class="card">
+<div class="card-icon">&#x1F4BC;</div>
+<h3>Services</h3>
+<p>IT helpdesk support for businesses and individuals, plus remote support sessions.</p>
+<span class="card-link">View services &rarr;</span>
 </a>
-<a href="/gen-tools" class="card">
-<div class="card-icon">&#x1F9EE;</div>
-<h3>General Tools</h3>
-<p>Everyday calculators and converters: unit conversion, percentages, tip splitting, dates, dice, colours and a stopwatch.</p>
-<span class="card-link">Open tools &rarr;</span>
+<a href="/about" class="card">
+<div class="card-icon">&#x1F464;</div>
+<h3>About</h3>
+<p>Who TMTCo is and the person behind it, with a resume for hiring managers.</p>
+<span class="card-link">Read more &rarr;</span>
 </a>
-<a href="/commands" class="card">
-<div class="card-icon">&#x2328;&#xFE0F;</div>
-<h3>Command Reference</h3>
-<p>Useful commands for Windows (CMD and PowerShell), Linux and macOS, with a quick reference for each.</p>
-<span class="card-link">View commands &rarr;</span>
+<a href="/other" class="card">
+<div class="card-icon">&#x1F9F0;</div>
+<h3>Other</h3>
+<p>Command reference, IT tools and general-purpose tools, all in one place.</p>
+<span class="card-link">Open other &rarr;</span>
 </a>
 </div>
 </div>
@@ -2954,6 +2957,43 @@ ${licenseRows}
 // role assignments in Entra ID - these are just direct links, not a
 // bypass of that role check.
 // ============================================================
+const DASH_SUBNAV = [
+  { key: 'm365', label: 'Microsoft 365', href: '/dashboard' },
+  { key: 'spotify', label: 'Spotify', href: '/dashboard/spotify' },
+  { key: 'admin', label: 'Admin Links', href: '/dashboard/admin-links', adminOnly: true },
+];
+
+function dashSubNav(active, isAdmin) {
+  const items = DASH_SUBNAV.filter((i) => !i.adminOnly || isAdmin);
+  return `<div class="sub-nav" role="navigation" aria-label="Dashboard sections">${items.map((i) =>
+    `<a href="${i.href}" class="sub-nav-link${i.key === active ? ' active' : ''}">${i.label}</a>`
+  ).join('')}</div>`;
+}
+
+// Shown to any signed-in account that does not hold the Global Administrator role
+function dashboardNotAuthorised(session) {
+  const body = `
+<div class="page-section top">
+<div class="user-bar">
+<div class="user-bar-info">
+<div class="user-avatar">&#x1F464;</div>
+<div>
+<div class="user-name">${escapeHtml(session.name || session.email)}</div>
+<div class="user-email">${escapeHtml(session.email)}</div>
+</div>
+</div>
+<a href="/auth/logout" class="btn btn-ghost" style="font-size:.85rem;padding:.5rem 1rem;">Sign out</a>
+</div>
+<div class="placeholder-box">
+<div class="big-icon">&#x26D4;</div>
+<h3>Not Authorised</h3>
+<p>The dashboard is restricted to accounts holding the Global Administrator role. Contact <a href="mailto:logan.kelly@tmtcoau.com">logan.kelly@tmtcoau.com</a> if you believe this is a mistake.</p>
+</div>
+<div class="back-row"><a href="/" class="btn btn-ghost">&larr; Back to Home</a></div>
+</div>`;
+  return shell('Not Authorised', body, 'dashboard');
+}
+
 app.get('/dashboard', async (c) => {
   const session = await getSession(c);
 
@@ -2976,6 +3016,7 @@ app.get('/dashboard', async (c) => {
 <h2 class="section-title">Dashboard</h2>
 <p class="section-sub">Quick access to your Microsoft 365 apps and files.</p>
 </div>
+${dashSubNav('m365', isPortalAdmin(session))}
 <div class="cards">
 <a href="https://outlook.office.com/mail/" target="_blank" class="card">
 <div class="card-icon">&#x1F4E7;</div>
@@ -3033,28 +3074,6 @@ app.get('/dashboard', async (c) => {
 </a>
 </div>
 
-<div class="admin-section">
-<div class="admin-header">
-<span class="admin-icon">&#x1F6E1;&#xFE0F;</span>
-<div>
-<h3>Admin Centre</h3>
-<p>Direct links to Microsoft's admin portals. Access to each one still depends on your account's assigned admin role in Entra ID.</p>
-</div>
-</div>
-<div class="admin-links">
-<a href="https://admin.microsoft.com" target="_blank" class="admin-link">Microsoft 365 admin center</a>
-<a href="https://entra.microsoft.com" target="_blank" class="admin-link">Entra admin center</a>
-<a href="https://admin.exchange.microsoft.com" target="_blank" class="admin-link">Exchange admin center</a>
-<a href="https://tmtcoau-admin.sharepoint.com" target="_blank" class="admin-link">SharePoint admin center</a>
-<a href="https://admin.teams.microsoft.com" target="_blank" class="admin-link">Teams admin center</a>
-<a href="https://security.microsoft.com" target="_blank" class="admin-link">Security admin center</a>
-<a href="https://compliance.microsoft.com" target="_blank" class="admin-link">Purview compliance portal</a>
-<a href="https://intune.microsoft.com" target="_blank" class="admin-link">Intune admin center</a>
-<a href="https://portal.azure.com" target="_blank" class="admin-link">Azure portal</a>
-<a href="https://admin.powerplatform.microsoft.com" target="_blank" class="admin-link">Power Platform admin center</a>
-</div>
-</div>
-
 <div class="back-row"><a href="/" class="btn btn-ghost">&larr; Back to Home</a></div>
 </div>`;
     return shell('Dashboard', body, 'dashboard');
@@ -3078,6 +3097,98 @@ ${error ? `<div class="error-box">Sign-in failed or access denied. Contact logan
 </div>
 </div>`;
   return shell('Sign In', body, 'dashboard');
+});
+
+// ============================================================
+// ROUTES - DASHBOARD / ADMIN LINKS (Global Administrator only)
+// ============================================================
+app.get('/dashboard/admin-links', async (c) => {
+  const session = await getSession(c);
+  if (!session) return c.redirect('/dashboard');
+  if (!isPortalAdmin(session)) return dashboardNotAuthorised(session);
+
+  const body = `
+<div class="page-section top">
+<div class="user-bar">
+<div class="user-bar-info">
+<div class="user-avatar">&#x1F464;</div>
+<div>
+<div class="user-name">${escapeHtml(session.name || session.email)}</div>
+<div class="user-email">${escapeHtml(session.email)}</div>
+</div>
+</div>
+<a href="/auth/logout" class="btn btn-ghost" style="font-size:.85rem;padding:.5rem 1rem;">Sign out</a>
+</div>
+
+<div class="section-header">
+<div class="section-label">TMTCo</div>
+<h2 class="section-title">Dashboard</h2>
+<p class="section-sub">Admin links for Global Administrators.</p>
+</div>
+${dashSubNav('admin', true)}
+<div class="admin-section">
+<div class="admin-header">
+<span class="admin-icon">&#x1F6E1;&#xFE0F;</span>
+<div>
+<h3>Admin Centre</h3>
+<p>Direct links to Microsoft's admin portals. Access to each one still depends on your account's assigned admin role in Entra ID.</p>
+</div>
+</div>
+<div class="admin-links">
+<a href="https://admin.microsoft.com" target="_blank" class="admin-link">Microsoft 365 admin center</a>
+<a href="https://entra.microsoft.com" target="_blank" class="admin-link">Entra admin center</a>
+<a href="https://admin.exchange.microsoft.com" target="_blank" class="admin-link">Exchange admin center</a>
+<a href="https://tmtcoau-admin.sharepoint.com" target="_blank" class="admin-link">SharePoint admin center</a>
+<a href="https://admin.teams.microsoft.com" target="_blank" class="admin-link">Teams admin center</a>
+<a href="https://security.microsoft.com" target="_blank" class="admin-link">Security admin center</a>
+<a href="https://compliance.microsoft.com" target="_blank" class="admin-link">Purview compliance portal</a>
+<a href="https://intune.microsoft.com" target="_blank" class="admin-link">Intune admin center</a>
+<a href="https://portal.azure.com" target="_blank" class="admin-link">Azure portal</a>
+<a href="https://admin.powerplatform.microsoft.com" target="_blank" class="admin-link">Power Platform admin center</a>
+</div>
+</div>
+<div class="back-row"><a href="/dashboard" class="btn btn-ghost">&larr; Back to Dashboard</a></div>
+</div>`;
+  return shell('Admin Links', body, 'dashboard');
+});
+
+// ============================================================
+// ROUTES - DASHBOARD / SPOTIFY
+// ============================================================
+app.get('/dashboard/spotify', async (c) => {
+  const session = await getSession(c);
+  if (!session) return c.redirect('/dashboard');
+
+  const body = `
+<div class="page-section top">
+<div class="user-bar">
+<div class="user-bar-info">
+<div class="user-avatar">&#x1F464;</div>
+<div>
+<div class="user-name">${escapeHtml(session.name || session.email)}</div>
+<div class="user-email">${escapeHtml(session.email)}</div>
+</div>
+</div>
+<a href="/auth/logout" class="btn btn-ghost" style="font-size:.85rem;padding:.5rem 1rem;">Sign out</a>
+</div>
+
+<div class="section-header">
+<div class="section-label">TMTCo</div>
+<h2 class="section-title">Dashboard</h2>
+<p class="section-sub">Media links for TMTCo.</p>
+</div>
+${dashSubNav('spotify', isPortalAdmin(session))}
+<div class="cards">
+<a href="https://www.tmtcoau.com/spo" target="_blank" class="card">
+<div class="card-icon">&#127925;</div>
+<h3>Spotify</h3>
+<p>Access the TMTCo Spotify page.</p>
+<span class="card-link">Open Spotify &rarr;</span>
+</a>
+</div>
+<div class="back-row"><a href="/dashboard" class="btn btn-ghost">&larr; Back to Dashboard</a></div>
+</div>`;
+  return shell('Spotify', body, 'dashboard');
 });
 
 // ============================================================
@@ -3759,24 +3870,90 @@ app.get('/services', (c) => {
 <p class="section-sub">An overview of services offered by TMTCo.</p>
 </div>
 <div class="placeholder-box">
-<div class="big-icon">&#x1F6E0;&#xFE0F;</div>
-<h3>Coming Soon</h3>
-<p>This page is being set up. Reach out to <a href="mailto:logan.kelly@tmtcoau.com">logan.kelly@tmtcoau.com</a> in the meantime.</p>
+<div class="big-icon">&#x1F3AB;</div>
+<h3>General IT Helpdesk</h3>
+<p>Helpdesk support for businesses and individuals, covering everyday IT problems, setup and advice.</p>
+<p style="margin-top:.8rem">Details coming soon. Reach out to <a href="mailto:logan.kelly@tmtcoau.com">logan.kelly@tmtcoau.com</a> in the meantime.</p>
 </div>
-<div class="placeholder-box">
-
-<a href="https://www.tmtcoau.com/spo" target="_blank" class="card">
-<div class="card-icon">&#127925;</div>
-<h3>Spotify</h3>
-<p>Access the TMTCo Spotify page.</p>
-<span class="card-link">Open OneDrive &rarr;</span>
-</a>
+<div class="placeholder-box" style="margin-top:1.2rem">
+<div class="big-icon">&#x1F5A5;&#xFE0F;</div>
+<h3>Remote Support</h3>
+<p>Remote support sessions are run through Helpwire. If your technician has given you a Helpwire session code or link, use it to connect.</p>
+<!-- Add Helpwire session or download link here -->
+</div>
 <div class="back-row"><a href="/" class="btn btn-ghost">&larr; Back to Home</a></div>
-</div>
-
-
 </div>`;
   return shell('Services', body, 'services');
+});
+
+// ============================================================
+// ROUTES - ABOUT
+// ============================================================
+app.get('/about', (c) => {
+  const body = `
+<div class="page-section top">
+<div class="section-header">
+<div class="section-label">About</div>
+<h2 class="section-title">About TMTCo</h2>
+<p class="section-sub">The person behind tmtcoau.com and TMTCo.</p>
+</div>
+<div class="about-grid">
+<div class="about-text">
+<div class="section-label">About</div>
+<h2 class="section-title">For Hiring &amp; Interviewers</h2>
+<p>I'm Logan Yeomans, the person behind tmtcoau.com and TMTCo. I'm passionate about technology, IT infrastructure, and building practical solutions.</p>
+<p>If you're a hiring manager or recruiter, you can grab a copy of my resume below.</p>
+<div class="resume-box">
+<div>
+<strong>Logan Yeomans &mdash; Resume</strong>
+<!-- Update date when you upload a new resume -->
+<p>PDF download &middot; Last updated 26/10/26</p>
+</div>
+<!-- Update resume URL if it changes -->
+<a class="btn btn-primary" href="https://cp-int.tmtcoau.com/pdf-docs/Logan.Yeomans%20Resume-26.10.26.pdf" target="_blank">&#x2B07; Download PDF</a>
+</div>
+</div>
+<div class="about-placeholder">&#x1F468;&#x200D;&#x1F4BB;</div>
+</div>
+<div class="back-row"><a href="/" class="btn btn-ghost">&larr; Back to Home</a></div>
+</div>`;
+  return shell('About', body, 'about');
+});
+
+// ============================================================
+// ROUTES - OTHER (command reference, IT tools, general tools)
+// ============================================================
+app.get('/other', (c) => {
+  const body = `
+<div class="page-section top">
+<div class="section-header">
+<div class="section-label">Resources</div>
+<h2 class="section-title">Other</h2>
+<p class="section-sub">Command reference, IT tools and general-purpose tools, all in one place.</p>
+</div>
+<div class="cards">
+<a href="/commands" class="card">
+<div class="card-icon">&#x2328;&#xFE0F;</div>
+<h3>Command Reference</h3>
+<p>Useful commands for Windows (CMD and PowerShell), Linux and macOS, with a quick reference for each.</p>
+<span class="card-link">View commands &rarr;</span>
+</a>
+<a href="/it-tools" class="card">
+<div class="card-icon">&#x1F6E0;&#xFE0F;</div>
+<h3>IT Tools</h3>
+<p>Browser-based tools for everyday IT work: encoding, hashing, JWT and DNS lookups, subnet calculations, password generation and more.</p>
+<span class="card-link">Explore tools &rarr;</span>
+</a>
+<a href="/gen-tools" class="card">
+<div class="card-icon">&#x1F9EE;</div>
+<h3>General Tools</h3>
+<p>Everyday calculators and converters: unit conversion, percentages, tip splitting, dates, dice, colours and a stopwatch.</p>
+<span class="card-link">Open tools &rarr;</span>
+</a>
+</div>
+<div class="back-row"><a href="/" class="btn btn-ghost">&larr; Back to Home</a></div>
+</div>`;
+  return shell('Other', body, 'other');
 });
 
 // ============================================================
