@@ -506,7 +506,22 @@ ${body}
 </div>
 </footer>
 
-<!-- Microsoft Teams Chat Bot - appears on every page -->
+<!-- HopToDesk Support Widget -->
+<script>
+(function() {
+  window.HopToDeskWidget = {
+    color: '#3b82f6',
+    position: 'bottom-right',
+    greeting: 'Need help?',
+    company: 'TMTCo',
+    language: 'auto',
+    apiEndpoint: 'https://dashboard.hoptodesk.com/api',
+    dashboardUserId: 'u_cc1c814e366fa69c0811eaf9',
+    showMyTickets: true
+  };
+})();
+</script>
+<script src="https://dashboard.hoptodesk.com/widget/support-widget.js"></script>
 
 </body>
 </html>`;
@@ -985,22 +1000,7 @@ async function searchDirectoryUsers(c, session, q) {
 }
 
 
-<!-- HopToDesk Support Widget -->
-<script>
-(function() {
-  window.HopToDeskWidget = {
-    color: '#3b82f6',
-    position: 'bottom-right',
-    greeting: 'Need help?',
-    company: 'TMTCo',
-    language: 'auto',
-    apiEndpoint: 'https://dashboard.hoptodesk.com/api',
-    dashboardUserId: 'u_cc1c814e366fa69c0811eaf9',
-    showMyTickets: true
-  };
-})();
-</script>
-<script src="https://dashboard.hoptodesk.com/widget/support-widget.js"></script>
+
 // ============================================================
 // ROUTES - HOME
 // ============================================================
