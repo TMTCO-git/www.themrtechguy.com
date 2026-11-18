@@ -5668,6 +5668,7 @@ const GITHUB_PROJECTS = [
   { name: 'wordle-project', account: 'TMTCo', status: 'in-progress', description: 'A basic hub for all currently available Wordle and Wordle-like games.' },
   // TMTCO-git
   { name: 'www.themrtechguy.com', account: 'TMTCO-git', status: 'in-progress', description: 'Website source for themrtechguy.com.' },
+  { name: 'opensource-ssrp', account: 'TMTCO-git', status: 'in-progress', description: '.js based code for a Microsoft self-service password reset portal best suited for hybrid connections.' },
   // thetechguy34
   { name: 'Xbox360PeerPressure', account: 'thetechguy34', status: 'completed', description: 'Persistent softmod exploit for Xbox 360 with fixes for the ABadUpdate files fix.' },
 ];
