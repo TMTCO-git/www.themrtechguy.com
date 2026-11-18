@@ -450,6 +450,7 @@ function shell(title, body, activePage = '') {
 <ul class="nav-drawer-links">
 ${navItem('/', 'Home', 'home')}
 ${navItem('/tech', 'Tech Things', 'tech')}
+${navItem('/projects', 'Projects', 'projects')}
 ${navItem('/admin', 'Admin Panel', 'admin')}
 ${navItem('/dashboard', 'Dashboard', 'dashboard')}
 ${navItem('/tos', 'Terms of Service', 'tos')}
@@ -5650,6 +5651,183 @@ app.post('/auth/native/verifiedid/issue/callback', async (c) => {
     });
   }
   return c.json({ ok: true });
+});
+
+// ============================================================
+// ROUTES - PROJECTS (GitHub)
+// Repos are listed below. Latest commit is pulled live from the
+// GitHub API and cached for 10 minutes, so new pushes appear
+// automatically without redeploying.
+// ============================================================
+const GITHUB_PROJECTS = [
+  // TMTCo
+  { name: 'docker-minecraft-java-spigot-compose', account: 'TMTCo', status: 'completed', description: 'Docker Compose setup for a Java Spigot Minecraft server.' },
+  { name: 'scripts', account: 'TMTCo', status: 'in-progress', description: 'Collection of shell scripts.' },
+  { name: 'server-install-gui', account: 'TMTCo', status: 'in-progress', description: 'GUI for installing a server.' },
+  { name: 'serverthings', account: 'TMTCo', status: 'in-progress', description: 'Server setup tools and configuration.' },
+  { name: 'wordle-project', account: 'TMTCo', status: 'in-progress', description: 'A basic hub for all currently available Wordle and Wordle-like games.' },
+  // TMTCO-git
+  { name: 'www.themrtechguy.com', account: 'TMTCO-git', status: 'in-progress', description: 'Website source for themrtechguy.com.' },
+  // thetechguy34
+  { name: 'Xbox360PeerPressure', account: 'thetechguy34', status: 'completed', description: 'Persistent softmod exploit for Xbox 360 with fixes for the ABadUpdate files fix.' },
+];
+
+const PROJECT_GROUPS = [
+  { key: 'in-progress', label: 'In progress', color: '#f59e0b', bg: 'rgba(245,158,11,.12)' },
+  { key: 'completed', label: 'Completed', color: '#22c55e', bg: 'rgba(34,197,94,.12)' },
+];
+
+const GH_COMMIT_CACHE = new Map();
+const GH_COMMIT_TTL_MS = 10 * 60 * 1000;
+
+async function fetchLatestCommit(account, name) {
+  const key = `${account}/${name}`.toLowerCase();
+  const cached = GH_COMMIT_CACHE.get(key);
+  if (cached && Date.now() - cached.at < GH_COMMIT_TTL_MS) return cached.data;
+
+  try {
+    const res = await fetch(`https://api.github.com/repos/${account}/${name}/commits?per_page=1`, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'TMTCo-Website',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+    if (res.ok) {
+      const list = await res.json();
+      const c = Array.isArray(list) ? list[0] : null;
+      if (c) {
+        const data = {
+          sha: String(c.sha || '').slice(0, 7),
+          message: String(c.commit?.message || '').split('\n')[0],
+          author: c.commit?.author?.name || '',
+          date: c.commit?.author?.date || null,
+          url: c.html_url || `https://github.com/${account}/${name}/commits`,
+        };
+        GH_COMMIT_CACHE.set(key, { at: Date.now(), data });
+        return data;
+      }
+    }
+  } catch {
+    // Network or parse error: fall through and use the last known value.
+  }
+  return cached ? cached.data : null;
+}
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`;
+  const years = Math.floor(months / 12);
+  return `${years} year${years === 1 ? '' : 's'} ago`;
+}
+
+function renderProjectCard(p, group) {
+  const repoUrl = `https://github.com/${p.account}/${p.name}`;
+  const commit = p.commit;
+  const commitBlock = commit
+    ? `<div class="proj-commit">
+  <div class="proj-commit-msg" title="${escapeHtml(commit.message)}">${escapeHtml(commit.message || 'No commit message')}</div>
+  <div class="proj-commit-meta"><code>${escapeHtml(commit.sha)}</code> &middot; ${escapeHtml(timeAgo(commit.date))}${commit.author ? ` &middot; ${escapeHtml(commit.author)}` : ''}</div>
+</div>`
+    : `<div class="proj-commit"><div class="proj-commit-meta">Latest commit unavailable</div></div>`;
+
+  return `<article class="proj-card">
+  <div class="proj-top">
+    <div>
+      <h3 class="proj-name"><a href="${repoUrl}" target="_blank" rel="noopener">${escapeHtml(p.name)}</a></h3>
+      <div class="proj-account">${escapeHtml(p.account)}</div>
+    </div>
+    <span class="proj-pill" style="color:${group.color};background:${group.bg}">${group.label}</span>
+  </div>
+  <p class="proj-desc">${escapeHtml(p.description || '')}</p>
+  ${commitBlock}
+  <div class="proj-links">
+    <a href="${repoUrl}" target="_blank" rel="noopener">View repo</a>
+    ${commit ? `<a href="${escapeHtml(commit.url)}" target="_blank" rel="noopener">Latest commit</a>` : ''}
+  </div>
+</article>`;
+}
+
+const PROJECTS_CSS = `
+.proj-stats{display:flex;gap:1rem;flex-wrap:wrap;margin-top:2rem}
+.proj-stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.4rem;min-width:150px}
+.proj-stat strong{display:block;font-family:var(--heading);font-size:1.6rem;color:#fff;line-height:1.2}
+.proj-stat span{font-size:.8rem;color:var(--muted)}
+.proj-group{margin-top:3.5rem}
+.proj-group-head{display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem}
+.proj-group-head h2{font-family:var(--heading);font-size:1.35rem;color:#fff}
+.proj-count{font-size:.8rem;color:var(--muted);border:1px solid var(--border);border-radius:100px;padding:.1rem .65rem}
+.proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1.1rem}
+.proj-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;display:flex;flex-direction:column;gap:.85rem;transition:border-color var(--transition),transform var(--transition)}
+.proj-card:hover{border-color:rgba(59,130,246,.4);transform:translateY(-3px)}
+.proj-top{display:flex;justify-content:space-between;align-items:flex-start;gap:.75rem}
+.proj-name{font-family:var(--heading);font-weight:700;font-size:1.02rem;color:#fff;word-break:break-word;line-height:1.3}
+.proj-name a{color:inherit}
+.proj-name a:hover{color:var(--accent2)}
+.proj-account{font-size:.75rem;color:var(--muted);margin-top:.2rem}
+.proj-pill{font-size:.7rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:.25rem .65rem;border-radius:100px;white-space:nowrap}
+.proj-desc{color:var(--muted);font-size:.9rem;line-height:1.55;flex:1}
+.proj-commit{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:.75rem .9rem;font-size:.82rem}
+.proj-commit-msg{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.proj-commit-meta{color:var(--muted);margin-top:.25rem}
+.proj-commit-meta code{color:var(--accent2);font-family:ui-monospace,Menlo,monospace}
+.proj-links{display:flex;gap:.6rem;flex-wrap:wrap}
+.proj-links a{font-size:.85rem;font-weight:500;padding:.45rem .9rem;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text)}
+.proj-links a:hover{border-color:var(--accent);color:#fff}
+.proj-empty{color:var(--muted);margin-top:2rem}
+@media(max-width:600px){.proj-grid{grid-template-columns:1fr}}
+`;
+
+app.get('/projects', async (c) => {
+  const commits = await Promise.all(GITHUB_PROJECTS.map((p) => fetchLatestCommit(p.account, p.name)));
+  const items = GITHUB_PROJECTS.map((p, i) => ({ ...p, commit: commits[i] }));
+
+  // Newest activity first within each group
+  const byDate = (a, b) => new Date(b.commit?.date || 0) - new Date(a.commit?.date || 0);
+
+  const counts = {
+    total: items.length,
+    inProgress: items.filter((p) => p.status === 'in-progress').length,
+    completed: items.filter((p) => p.status === 'completed').length,
+  };
+
+  const groups = PROJECT_GROUPS.map((g) => {
+    const list = items.filter((p) => p.status === g.key).sort(byDate);
+    if (!list.length) return '';
+    return `<section class="proj-group">
+  <div class="proj-group-head">
+    <h2>${g.label}</h2>
+    <span class="proj-count">${list.length}</span>
+  </div>
+  <div class="proj-grid">${list.map((p) => renderProjectCard(p, g)).join('')}</div>
+</section>`;
+  }).join('');
+
+  const body = `<style>${PROJECTS_CSS}</style>
+<div class="page-section top">
+  <div class="section-header">
+    <div class="section-label">GitHub</div>
+    <h2 class="section-title">Projects</h2>
+    <p class="section-sub">Repositories I'm working on, from my GitHub accounts. Latest commits update automatically.</p>
+  </div>
+  <div class="proj-stats">
+    <div class="proj-stat"><strong>${counts.total}</strong><span>Total projects</span></div>
+    <div class="proj-stat"><strong>${counts.inProgress}</strong><span>In progress</span></div>
+    <div class="proj-stat"><strong>${counts.completed}</strong><span>Completed</span></div>
+  </div>
+  ${groups || '<p class="proj-empty">No projects to show yet.</p>'}
+</div>`;
+
+  return shell('Projects', body, 'projects');
 });
 
 export default app;
