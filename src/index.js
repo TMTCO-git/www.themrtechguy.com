@@ -5687,20 +5687,29 @@ async function fetchLatestCommit(account, name, env) {
   const cached = GH_COMMIT_CACHE.get(key);
   if (cached && Date.now() - cached.at < cached.ttl) return cached.data;
 
-  const headers = {
+  const baseHeaders = {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'TMTCo-Website',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  if (env?.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+  const url = `https://api.github.com/repos/${account}/${name}/commits?per_page=1`;
+
+  // Try with the token first. If GitHub refuses it (for example an organization
+  // that hasn't approved the token), retry without it, since these repos are public.
+  const attempts = [];
+  if (env?.GITHUB_TOKEN) attempts.push({ Authorization: `Bearer ${env.GITHUB_TOKEN}` });
+  attempts.push(null);
 
   let data = null;
-  try {
-    const res = await fetch(`https://api.github.com/repos/${account}/${name}/commits?per_page=1`, { headers });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      console.error(`GitHub commits ${account}/${name} failed: ${res.status} ${body.slice(0, 200)}`);
-    } else {
+  for (const auth of attempts) {
+    try {
+      const res = await fetch(url, { headers: auth ? { ...baseHeaders, ...auth } : baseHeaders });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.error(`GitHub commits ${account}/${name} failed (${auth ? 'with token' : 'no token'}): ${res.status} ${body.slice(0, 200)}`);
+        if (res.status === 401 || res.status === 403) continue; // try next option
+        break; // 404 and others won't be fixed by a retry
+      }
       const list = await res.json();
       const c = Array.isArray(list) ? list[0] : null;
       if (c) {
@@ -5714,9 +5723,11 @@ async function fetchLatestCommit(account, name, env) {
       } else {
         console.error(`GitHub commits ${account}/${name}: no commits returned`);
       }
+      break;
+    } catch (err) {
+      console.error(`GitHub commits ${account}/${name} request threw:`, err?.message || err);
+      break;
     }
-  } catch (err) {
-    console.error(`GitHub commits ${account}/${name} request threw:`, err?.message || err);
   }
 
   if (data) {
