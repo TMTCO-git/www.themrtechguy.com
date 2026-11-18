@@ -5680,38 +5680,53 @@ const PROJECT_GROUPS = [
 const GH_COMMIT_CACHE = new Map();
 const GH_COMMIT_TTL_MS = 10 * 60 * 1000;
 
-async function fetchLatestCommit(account, name) {
+const GH_FAIL_TTL_MS = 2 * 60 * 1000;
+
+async function fetchLatestCommit(account, name, env) {
   const key = `${account}/${name}`.toLowerCase();
   const cached = GH_COMMIT_CACHE.get(key);
-  if (cached && Date.now() - cached.at < GH_COMMIT_TTL_MS) return cached.data;
+  if (cached && Date.now() - cached.at < cached.ttl) return cached.data;
 
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'TMTCo-Website',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (env?.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+
+  let data = null;
   try {
-    const res = await fetch(`https://api.github.com/repos/${account}/${name}/commits?per_page=1`, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'TMTCo-Website',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    });
-    if (res.ok) {
+    const res = await fetch(`https://api.github.com/repos/${account}/${name}/commits?per_page=1`, { headers });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error(`GitHub commits ${account}/${name} failed: ${res.status} ${body.slice(0, 200)}`);
+    } else {
       const list = await res.json();
       const c = Array.isArray(list) ? list[0] : null;
       if (c) {
-        const data = {
+        data = {
           sha: String(c.sha || '').slice(0, 7),
           message: String(c.commit?.message || '').split('\n')[0],
           author: c.commit?.author?.name || '',
           date: c.commit?.author?.date || null,
           url: c.html_url || `https://github.com/${account}/${name}/commits`,
         };
-        GH_COMMIT_CACHE.set(key, { at: Date.now(), data });
-        return data;
+      } else {
+        console.error(`GitHub commits ${account}/${name}: no commits returned`);
       }
     }
-  } catch {
-    // Network or parse error: fall through and use the last known value.
+  } catch (err) {
+    console.error(`GitHub commits ${account}/${name} request threw:`, err?.message || err);
   }
-  return cached ? cached.data : null;
+
+  if (data) {
+    GH_COMMIT_CACHE.set(key, { at: Date.now(), ttl: GH_COMMIT_TTL_MS, data });
+    return data;
+  }
+  // Failed: keep the last good value if we have one, and don't retry on every page view.
+  const fallback = cached?.data ?? null;
+  GH_COMMIT_CACHE.set(key, { at: Date.now(), ttl: GH_FAIL_TTL_MS, data: fallback });
+  return fallback;
 }
 
 function timeAgo(iso) {
@@ -5788,7 +5803,7 @@ const PROJECTS_CSS = `
 `;
 
 app.get('/projects', async (c) => {
-  const commits = await Promise.all(GITHUB_PROJECTS.map((p) => fetchLatestCommit(p.account, p.name)));
+  const commits = await Promise.all(GITHUB_PROJECTS.map((p) => fetchLatestCommit(p.account, p.name, c.env)));
   const items = GITHUB_PROJECTS.map((p, i) => ({ ...p, commit: commits[i] }));
 
   // Newest activity first within each group
